@@ -281,20 +281,24 @@ class Schema(object):
                             isinstance(key, Required))
         error = None
         errors = []
+        if not self.extra:
+            extra_keys = set(data.keys()).difference([str(key) for key in schema.keys()])
+            if extra_keys:
+                for key in extra_keys:
+                    errors.append(Invalid('extra keys not allowed', path + [key]))
+
         for key, value in data.items():
             key_path = path + [key]
             for skey, svalue in schema.items():
-                if skey is Extra:
-                    new_key = key
-                else:
-                    try:
-                        new_key = self.validate(key_path, skey, key)
-                    except Invalid as e:
-                        if len(e.path) > len(key_path):
-                            raise
-                        if not error or len(e.path) > len(error.path):
-                            error = e
-                        continue
+                required_keys.discard(skey)
+                try:
+                    new_key = self.validate(key_path, skey, key)
+                except Invalid as e:
+                    if len(e.path) > len(key_path):
+                        raise
+                    if not error or len(e.path) > len(error.path):
+                        error = e
+                    continue
                 # Backtracking is not performed once a key is selected, so if
                 # the value is invalid we immediately throw an exception.
                 try:
@@ -305,16 +309,11 @@ class Schema(object):
                     else:
                         errors.append(Invalid(e.msg + ' for dictionary value',
                                 e.path))
-                    break
+                    continue
+        else:
+            if self.extra:
+                out[key] = value
 
-                # Key and value okay, mark any Required() fields as found.
-                required_keys.discard(skey)
-                break
-            else:
-                if self.extra:
-                    out[key] = value
-                else:
-                    errors.append(Invalid('extra keys not allowed', key_path))
         for key in required_keys:
             msg = key.msg if hasattr(key, 'msg') and key.msg else 'required key not provided'
             errors.append(Invalid(msg, path + [key]))
