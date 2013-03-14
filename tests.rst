@@ -3,54 +3,43 @@ Error reporting should be accurate::
   >>> from voluptuous import *
   >>> schema = Schema(['one', {'two': 'three', 'four': ['five'],
   ...                          'six': {'seven': 'eight'}}])
-  >>> schema(['one'])
-  ['one']
-  >>> schema([{'two': 'three'}])
-  [{'two': 'three'}]
+  >>> res = schema(['one', {'two': 'three', 'four': ['five'],
+  ...                          'six': {'seven': 'eight'}}])
+  >>> [res[0], sorted(res[1].items())]
+  ['one', [('four', ['five']), ('six', {'seven': 'eight'}), ('two', 'three')]]
 
 It should show the exact index and container type, in this case a list value::
 
   >>> schema(['one', 'two'])
   Traceback (most recent call last):
   ...
-  MultipleInvalid: invalid list value @ data[1]
+  ValidationError: expected a dictionary @ data[1]
 
 It should also be accurate for nested values::
 
-  >>> schema([{'two': 'nine'}])
+  >>> schema(['one', {'two': 'nine', 'four': ['five'],
+  ...                          'six': {'seven': 'eight'}}])
   Traceback (most recent call last):
   ...
-  MultipleInvalid: not a valid value for dictionary value @ data[0]['two']
-  >>> schema([{'four': ['nine']}])
+  ValidationError: not a valid value @ data[1]['two']
+  >>> schema(['one', {'two': 'three', 'four': ['six'],
+  ...                          'six': {'seven': 'eight'}}])
   Traceback (most recent call last):
   ...
-  MultipleInvalid: invalid list value @ data[0]['four'][0]
-  >>> schema([{'six': {'seven': 'nine'}}])
+  ValidationError: not a valid value @ data[1]['four'][0]
+  >>> schema(['one', {'two': 'three', 'four': ['five'],
+  ...                          'six': {'seven': 'nine'}}])
   Traceback (most recent call last):
   ...
-  MultipleInvalid: not a valid value for dictionary value @ data[0]['six']['seven']
+  ValidationError: not a valid value @ data[1]['six']['seven']
 
 Errors should be reported depth-first::
 
   >>> validate = Schema({'one': {'two': 'three', 'four': 'five'}})
-  >>> try:
-  ...   validate({'one': {'four': 'six'}})
-  ... except Invalid as e:
-  ...   print(e)
-  ...   print(e.path)
-  not a valid value for dictionary value @ data['one']['four']
-  ['one', 'four']
-
-Voluptuous supports validation when extra fields are present in the data::
-
-  >>> schema = Schema({'one': 1, Extra: object})
-  >>> schema({'two': 'two', 'one': 2})
-  {'two': 'two', 'one': 2}
-  >>> schema = Schema({'one': 1})
-  >>> schema({'two': 2})
+  >>> validate({'one': {'two': 'three', 'four': 'six'}})
   Traceback (most recent call last):
   ...
-  MultipleInvalid: extra keys not allowed @ data['two']
+  ValidationError: not a valid value @ data['one']['four']
 
 
 dict, list, and tuple should be available as type validators::
@@ -88,20 +77,21 @@ Multiple errors are reported::
   >>> schema = Schema({'one': 1, 'two': 2})
   >>> try:
   ...   schema({'one': 2, 'two': 3, 'three': 4})
-  ... except MultipleInvalid as e:
-  ...   errors = sorted(e.errors, key=lambda k: str(k))
-  ...   print([str(i) for i in errors])  # doctest: +NORMALIZE_WHITESPACE
-  ["extra keys not allowed @ data['three']",
-   "not a valid value for dictionary value @ data['one']",
-   "not a valid value for dictionary value @ data['two']"]
+  ... except ValidationError as e:
+  ...   paths = sorted(e.errors.keys())
+  ...   print([(path, str(error)) for path in paths for error in e.errors[path]])  # doctest: +NORMALIZE_WHITESPACE
+  [("data['one']", 'not a valid value'),
+  ("data['three']", 'extra keys not allowed'),
+  ("data['two']", 'not a valid value')]
   >>> schema = Schema([[1], [2], [3]])
   >>> try:
   ...   schema([1, 2, 3])
-  ... except MultipleInvalid as e:
-  ...   print([str(i) for i in e.errors])  # doctest: +NORMALIZE_WHITESPACE
-  ['invalid list value @ data[0]',
-   'invalid list value @ data[1]',
-   'invalid list value @ data[2]']
+  ... except ValidationError as e:
+  ...   paths = sorted(e.errors.keys())
+  ...   print([(path, str(error)) for path in paths for error in e.errors[path]])  # doctest: +NORMALIZE_WHITESPACE
+  [('data[0]', 'expected a list'),
+   ('data[1]', 'expected a list'),
+   ('data[2]', 'expected a list')]
 
 Custom classes validate as schemas::
 
@@ -126,18 +116,12 @@ Classes with custom metaclasses should validate as schemas::
 Schemas built with All() should give the same error as the original validator (Issue #26)::
 
     >>> schema = Schema({
-    ...   Required('items'): All([{
-    ...     Required('foo'): str
+    ...   'items': All([{
+    ...     'foo': str
     ...   }])
     ... })
 
     >>> schema({'items': [{}]})
     Traceback (most recent call last):
     ...
-    MultipleInvalid: required key not provided @ data['items'][0]['foo']
-
-Schemas can coerce values by default::
-
-  >>> schema = Schema({'key': int}, coerce=True)
-  >>> schema({'key': '10'})
-  {'key': 10}
+    ValidationError: Missing key @ data['items'][0]['foo']

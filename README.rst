@@ -39,11 +39,11 @@ express the constraints of the API. According to the API, ``per_page`` should
 be restricted to at most 20, for example. To describe the semantics of the API
 more accurately, our schema will need to be more thoroughly defined::
 
-  >>> from voluptuous import Required, All, Length, Range
+  >>> from voluptuous import All, Length, Range, Optional
   >>> schema = Schema({
-  ...   Required('q'): All(str, Length(min=1)),
-  ...   'per_page': All(int, Range(min=1, max=20)),
-  ...   'page': All(int, Range(min=0)),
+  ...   'q': All(str, Length(min=1)),
+  ...   Optional('per_page'): All(int, Range(min=1, max=20)),
+  ...   Optional('page'): All(int, Range(min=0)),
   ... })
 
 This schema fully enforces the interface defined in Twitter's documentation,
@@ -54,21 +54,21 @@ and goes a little further for completeness.
   >>> schema({})
   Traceback (most recent call last):
   ...
-  MultipleInvalid: required key not provided @ data['q']
+  ValidationError: Missing key @ data['q']
 
 ...must be a string::
 
   >>> schema({'q': 123})
   Traceback (most recent call last):
   ...
-  MultipleInvalid: expected str for dictionary value @ data['q']
+  ValidationError: expected str @ data['q']
 
 ...and must be at least one character in length::
 
   >>> schema({'q': ''})
   Traceback (most recent call last):
   ...
-  MultipleInvalid: length of value must be at least 1 for dictionary value @ data['q']
+  ValidationError: length of value must be at least 1 @ data['q']
   >>> schema({'q': '#topic'})
   {'q': '#topic'}
 
@@ -77,18 +77,18 @@ and goes a little further for completeness.
   >>> schema({'q': '#topic', 'per_page': 900})
   Traceback (most recent call last):
   ...
-  MultipleInvalid: value must be at most 20 for dictionary value @ data['per_page']
+  ValidationError: value must be at most 20 @ data['per_page']
   >>> schema({'q': '#topic', 'per_page': -10})
   Traceback (most recent call last):
   ...
-  MultipleInvalid: value must be at least 1 for dictionary value @ data['per_page']
+  ValidationError: value must be at least 1 @ data['per_page']
 
 "page" is an integer >= 0::
 
   >>> schema({'q': '#topic', 'page': 'one'})
   Traceback (most recent call last):
   ...
-  MultipleInvalid: expected int for dictionary value @ data['page']
+  ValidationError: expected int @ data['page']
   >>> schema({'q': '#topic', 'page': 1})
   {'q': '#topic', 'page': 1}
 
@@ -120,20 +120,26 @@ instance of the type::
   >>> schema('one')
   Traceback (most recent call last):
   ...
-  MultipleInvalid: expected int
+  ValidationError: expected int @ data[]
 
 Lists
 ~~~~~
-Lists in the schema are treated as a set of valid values. Each element in the
-schema list is compared to each value in the input data::
+Lists are treated as a list of strict elements. Everything should match:
+
 
   >>> schema = Schema([1, 'a', 'string'])
   >>> schema([1])
-  [1]
+  Traceback (most recent call last):
+  ...
+  ValidationError: Missing key @ data[1]
   >>> schema([1, 1, 1])
-  [1, 1, 1]
+  Traceback (most recent call last):
+  ...
+  ValidationError: not a valid value @ data[1]
   >>> schema(['a', 1, 'string', 1, 'string'])
-  ['a', 1, 'string', 1, 'string']
+  Traceback (most recent call last):
+  ...
+  ValidationError: not a valid value @ data[0]
 
 Validation functions
 ~~~~~~~~~~~~~~~~~~~~
@@ -146,9 +152,11 @@ The simplest kind of validator is a Python function that raises `ValueError`
 when its argument is invalid. Conveniently, many builtin Python functions have
 this property. Here's an example of a date validator::
 
+..note:: TypeError can also be used for type checking
+
   >>> from datetime import datetime
   >>> def Date(fmt='%Y-%m-%d'):
-  ...   return lambda v: datetime.strptime(v, fmt)
+  ...   return lambda v, p: datetime.strptime(v, fmt)
 
   >>> schema = Schema(Date())
   >>> schema('2013-03-03')
@@ -156,7 +164,7 @@ this property. Here's an example of a date validator::
   >>> schema('2013-03')
   Traceback (most recent call last):
   ...
-  MultipleInvalid: not a valid value
+  ValidationError: time data '2013-03' does not match format '%Y-%m-%d' @ data[]
 
 In addition to simply determining if a value is valid, validators may mutate
 the value into a valid form. An example of this is the ``Coerce(type)``
@@ -184,10 +192,9 @@ resulting error messages.
 
 Dictionaries
 ~~~~~~~~~~~~
-Each key-value pair in a schema dictionary is validated against each key-value
-pair in the corresponding data dictionary::
+Each key-value pair in a schema dictionary is validated against the corresponding key in the data dictionary::
 
-  >>> schema = Schema({1: 'one', 2: 'two'})
+  >>> schema = Schema({1: 'one', Optional(2): 'two'})
   >>> schema({1: 'one'})
   {1: 'one'}
 
@@ -200,7 +207,7 @@ exceptions::
   >>> schema({1: 2, 2: 3})
   Traceback (most recent call last):
   ...
-  MultipleInvalid: extra keys not allowed @ data[1]
+  ValidationError: extra keys not allowed @ data[1]
 
 This behaviour can be altered on a per-schema basis with ``Schema(..., extra=True)``::
 
@@ -208,57 +215,35 @@ This behaviour can be altered on a per-schema basis with ``Schema(..., extra=Tru
   >>> schema({1: 2, 2: 3})
   {1: 2, 2: 3}
 
-It can also be overridden per-dictionary by using the catch-all marker token
-``extra`` as a key::
-
-  >>> from voluptuous import Extra
-  >>> schema = Schema({1: {Extra: object}})
-  >>> schema({1: {'foo': 'bar'}})
-  {1: {'foo': 'bar'}}
 
 Required dictionary keys
 ````````````````````````
-By default, keys in the schema are not required to be in the data::
+By default, keys in the schema are required to be in the data::
 
   >>> schema = Schema({1: 2, 3: 4})
   >>> schema({3: 4})
-  {3: 4}
-
-Similarly to how extra_ keys work, this behaviour can be overridden per-schema::
-
-  >>> schema = Schema({1: 2, 3: 4}, required=True)
-  >>> schema({3: 4})
   Traceback (most recent call last):
   ...
-  MultipleInvalid: required key not provided @ data[1]
+  ValidationError: Missing key @ data[1]
 
-And per-key, with the marker token ``Required(key)``::
-
-  >>> schema = Schema({Required(1): 2, 3: 4})
-  >>> schema({3: 4})
-  Traceback (most recent call last):
-  ...
-  MultipleInvalid: required key not provided @ data[1]
-  >>> schema({1: 2})
-  {1: 2}
 
 Optional dictionary keys
 ````````````````````````
-If a schema has ``required=True``, keys may be individually marked as optional
-using the marker token ``Optional(key)``::
 
-  >>> from voluptuous import Optional
-  >>> schema = Schema({1: 2, Optional(3): 4}, required=True)
+Per default, all keys are required. Some keys may be individually marked as optional using the marker token ``Optional(key)``::
+
+  >>> from voluptuous import Optional, ValidationError
+  >>> schema = Schema({1: 2, Optional(3): 4})
   >>> schema({})
   Traceback (most recent call last):
   ...
-  MultipleInvalid: required key not provided @ data[1]
+  ValidationError: Missing key @ data[1]
   >>> schema({1: 2})
   {1: 2}
   >>> schema({1: 2, 4: 5})
   Traceback (most recent call last):
   ...
-  MultipleInvalid: extra keys not allowed @ data[4]
+  ValidationError: extra keys not allowed @ data[4]
   >>> schema({1: 2, 3: 4})
   {1: 2, 3: 4}
 
@@ -276,7 +261,7 @@ is determined by comparing the depth of the path where the check is, to the
 depth of the path where the error occurred. If the error is more than one level
 deeper, it is reported.
 
-The upshot of this is that *matching is depth-first and fail-fast*.
+The upshot of this is that *matching is depth-first and fail-last*.
 
 To illustrate this, here is an example schema::
 
@@ -288,17 +273,20 @@ but the literal ``6`` will not match any of the elements of that list. This
 error will be reported back to the user immediately. No backtracking is
 attempted::
 
-  >>> schema([[6]])
-  Traceback (most recent call last):
-  ...
-  MultipleInvalid: invalid list value @ data[0][0]
+  >>> try:
+  ...     schema([[6]])
+  ... except ValidationError as e:
+  ...     print e.errors['data[0][0]'][0]
+  not a valid value
 
 If we pass the data ``[6]``, the ``6`` is not a list type and so will not
-recurse into the first element of the schema. Matching will continue on to the
-second element in the schema, and succeed::
+recurse into the first element of the schema. This will create a type error::
 
   >>> schema([6])
-  [6]
+  Traceback (most recent call last):
+  ...
+  ValidationError: expected a list @ data[0]
+
 
 Why use Voluptuous over another validation library?
 ---------------------------------------------------
