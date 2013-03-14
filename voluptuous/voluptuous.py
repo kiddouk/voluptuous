@@ -102,6 +102,8 @@ from functools import wraps
 import os
 import re
 import sys
+import collections
+
 if sys.version > '3':
     import urllib.parse as urlparse
     long = int
@@ -125,7 +127,52 @@ class Undefined(object):
 
 UNDEFINED = Undefined()
 
-import collections
+
+VALIDATION_ERRORS = {"TOOLONG": "length must be at most %s",
+                    "TOOSHORT": "length must be at least %s",
+                    "TOOLOW": "value (%s) must be at least %s",
+                    "TOOHIGH": "value (%s) must be at most %s",
+                    "DOESNOTMATCH": "value %s does not match the regexp %s",
+                    "TYPEERROR": "expected a %s",
+                    "VALUEERROR": "Not a valid value",
+                    "MISSINGKEY": "Missing mandatory value",
+                    "NOTAURL": "Provided value (%s) is not a valide url",
+                    "NOTABOOLEAN": "Booleans should be 1, yes, no, true, false, enable, disable, on, off. Not %s.",
+                    "NOMATCH": "No rules are matching the provided data %s",
+                    "EXTRAKEY": "Extra key not allowed",
+                    }
+
+
+def encode_exception(exc):
+    """
+    This function will translate the exception into a comprehensive message to the user.
+
+    :param exc: An exception containing an error type in args[0] and other arguments in args[1:]
+    :returns: a dict containing the error code and the description message
+    """
+    code = exc.args[0]
+    description = translate_exception(exc)
+    if description is None:
+        return {'code': code, 'message': 'unknown error', 'args': exc.args}
+
+    return {'code': exc.args[0], 'message': description}
+
+def translate_exception(exc):
+    """
+    This function will translate the exception into a comprehensive message to the user.
+
+    :param exc: An exception containing an error type in args[0] and other arguments in args[1:]
+    :returns: a dict containing the error code and the description message
+    """
+    try:
+        code = exc.args[0]
+        description = VALIDATION_ERRORS[code] % exc.args[1:]
+        return description
+    except KeyError:
+        return None
+
+
+
 
 class TransformedDict(collections.MutableMapping):
     """A dictionary which applies an arbitrary key-altering function before accessing the keys"""
@@ -177,7 +224,7 @@ class ValidationError(Exception):
 
     def add(self, path, error):
         if isinstance(path, list):
-            path = "data[%s]" % "][".join(map(repr, path))
+            path = "%s" % ".".join(map(str, path))
 
         self.errors[path].append(error)
 
@@ -195,7 +242,7 @@ class ValidationError(Exception):
     @property
     def msg(self):
         first_element = self.errors.keys()[0]
-        return "%s @ %s" % (self.errors[first_element][0], first_element)
+        return "%s @ %s." % (translate_exception(self.errors[first_element][0]), first_element)
 
 
 class Schema(object):
@@ -264,29 +311,30 @@ class Schema(object):
             >>> validate([])
             Traceback (most recent call last):
             ...
-            ValidationError: expected a dictionary @ data[]
+            ValidationError: expected a dict @ .
 
         An invalid dictionary value:
 
             >>> validate = Schema({'one': 'two', 'three': 'four'})
-            >>> validate({'one': 'three'})
-            Traceback (most recent call last):
-            ...
-            ValidationError: not a valid value @ data['one']
+            >>> try:
+            ...     validate({'one': 'three'})
+            ... except ValidationError as e:
+            ...     print translate_exception(e.errors['one'][0])
+            Not a valid value
 
         A missing required key:
 
             >>> validate({'two': 'three'})
             Traceback (most recent call last):
             ...
-            ValidationError: Missing key @ data['one']
+            ValidationError: Missing mandatory value @ one.
 
         An invalid key:
 
             >>> validate({'one': 'two', 'two': 'three', 'three': 'four'})
             Traceback (most recent call last):
             ...
-            ValidationError: extra keys not allowed @ data['two']
+            ValidationError: Extra key not allowed @ two.
 
         Validation function, in this case the "int" type:
 
@@ -298,7 +346,7 @@ class Schema(object):
         schema = MyTransformedDict(schema)
 
         if not isinstance(data, dict):
-            raise ValueError('expected a dictionary')
+            raise ValueError('TYPEERROR', 'dict')
 
         out = type(data)()
         required_keys = set(key for key in schema if not isinstance(key, Optional))
@@ -310,7 +358,7 @@ class Schema(object):
             extra_keys = set(data.keys()).difference(schema_keys)
             if extra_keys:
                 for key in extra_keys:
-                    errors.add(path + [key], ValueError('extra keys not allowed'))
+                    errors.add(path + [key], ValueError('EXTRAKEY'))
 
         for key, value in data.items():
             key_path = path + [key]
@@ -333,7 +381,7 @@ class Schema(object):
 
         for key in required_keys:
             msg = key.msg if hasattr(key, 'msg') and key.msg else 'required key not provided'
-            errors.add(path + [key], ValueError("Missing key"))
+            errors.add(path + [key], ValueError("MISSINGKEY"))
 
         if len(errors):
             raise errors
@@ -350,15 +398,16 @@ class Schema(object):
         >>> validator(['one'])
         Traceback (most recent call last):
         ...
-        ValidationError: Missing key @ data[1]
-        >>> validator([3.5])
-        Traceback (most recent call last):
-        ...
-        ValidationError: not a valid value @ data[0]
+        ValidationError: Missing mandatory value @ 1.
+        >>> try:
+        ...     validator([3.5])
+        ... except ValidationError as e:
+        ...     print translate_exception(e.errors['0'][0])
+        Not a valid value
         """
         seq_type_name = seq_type.__name__
         if not isinstance(data, seq_type):
-            raise TypeError('expected a %s' % seq_type_name)
+            raise TypeError("TYPEERROR", seq_type_name)
 
         # Empty seq schema, allow any data.
         if not schema:
@@ -380,7 +429,7 @@ class Schema(object):
                 except ValidationError as e:
                     errors.add_multi(e)
             except IndexError as e:
-                errors.add(index_path, ValueError("Missing key"))
+                errors.add(index_path, ValueError("MISSINGKEY"))
 
         if len(errors):
             raise errors
@@ -395,10 +444,11 @@ class Schema(object):
         >>> validator = Schema(('one', 'two', int))
         >>> validator(('one', 'two', 3))
         ('one', 'two', 3)
-        >>> validator((3.5,))
-        Traceback (most recent call last):
-        ...
-        ValidationError: not a valid value @ data[0]
+        >>> try:
+        ...     validator((3.5,))
+        ... except ValidationError as e:
+        ...     print translate_exception(e.errors['0'][0])
+        Not a valid value
         """
         return self._validate_sequence(path, schema, data, seq_type=tuple)
 
@@ -411,11 +461,12 @@ class Schema(object):
         >>> validator(['one'])
         Traceback (most recent call last):
         ...
-        ValidationError: Missing key @ data[1]
-        >>> validator([3.5])
-        Traceback (most recent call last):
-        ...
-        ValidationError: not a valid value @ data[0]
+        ValidationError: Missing mandatory value @ 1.
+        >>> try:
+        ...     validator([3.5])
+        ... except ValidationError as e:
+        ...     print translate_exception(e.errors['0'][0])
+        Not a valid value
         """
         return self._validate_sequence(path, schema, data, seq_type=list)
 
@@ -430,7 +481,7 @@ class Schema(object):
         >>> Schema.validate_scalar([], float, '1')
         Traceback (most recent call last):
         ...
-        TypeError: expected float
+        TypeError: ('TYPEERROR', 'float')
 
         Callables have
         >>> Schema.validate_scalar([], lambda v, p: float(v), '1')
@@ -447,12 +498,12 @@ class Schema(object):
             if isinstance(data, schema):
                 return data
             elif not coerce:
-                raise TypeError('expected %s' % schema.__name__)
+                raise TypeError('TYPEERROR', schema.__name__)
         if callable(schema):
             return schema(data, path)
         else:
             if data != schema:
-                raise ValueError('not a valid value')
+                raise ValueError('VALUEERROR')
         return data
 
 class Marker(object):
@@ -500,49 +551,6 @@ def Extra(_):
 # deprecated object, so we just leave an alias here instead.
 extra = Extra
 
-def IsTrue():
-    """Assert that a value is true, in the Python sense.
-
-    >>> validate = Schema(IsTrue())
-
-    "In the Python sense" means that implicitly false values, such as empty
-    lists, dictionaries, etc. are treated as "false":
-
-    >>> validate([])
-    Traceback (most recent call last):
-    ...
-    ValidationError: value was not true @ data[]
-    >>> validate([1])
-    [1]
-    >>> validate(False)
-    Traceback (most recent call last):
-    ...
-    ValidationError: value was not true @ data[]
-
-    ...and so on.
-    """
-    def f(v, path):
-        if v:
-            return v
-        raise ValueError('value was not true')
-    return f
-
-
-def IsFalse():
-    """Assert that a value is false, in the Python sense.
-
-    (see :func:`IsTrue` for more detail)
-
-    >>> validate = Schema(IsFalse())
-    >>> validate([])
-    []
-    """
-    def f(v, path):
-        if v:
-            raise ValueError('value was not false')
-        return v
-    return f
-
 
 def Boolean():
     """Convert human-readable boolean values to a bool.
@@ -556,16 +564,16 @@ def Boolean():
     >>> validate('moo')
     Traceback (most recent call last):
     ...
-    ValidationError: expected boolean @ data[]
+    ValidationError: Booleans should be 1, yes, no, true, false, enable, disable, on, off. Not moo. @ .
     """
     def f(v, path):
         if isinstance(v, basestring):
             v = v.lower()
-            if v in ('1', 'true', 'yes', 'on', 'enable'):
+            if v in ('1', 'true', 'yes', 'on', 'enable', True):
                 return True
-            if v in ('0', 'false', 'no', 'off', 'disable'):
+            if v in ('0', 'false', 'no', 'off', 'disable', False):
                 return False
-            raise ValueError('expected boolean')
+            raise ValueError("NOTABOOLEAN", v)
         return bool(v)
     return f
 
@@ -585,7 +593,7 @@ def Any(*validators, **kwargs):
     >>> validate('moo')
     Traceback (most recent call last):
     ...
-    ValidationError: no rules are matching @ data[]
+    ValidationError: No rules are matching the provided data moo @ .
     """
     msg = kwargs.pop('msg', None)
     schemas = [Schema(val) for val in validators]
@@ -599,7 +607,7 @@ def Any(*validators, **kwargs):
             except (ValueError, TypeError, ValidationError) as e:
                 pass
         else:
-            raise ValueError("no rules are matching")
+            raise ValueError("NOMATCH", v)
 
     return f
 
@@ -636,7 +644,7 @@ def All(*validators, **kwargs):
     return f
 
 
-def Match(pattern, msg=None):
+def Match(pattern):
     """Value must match the regular expression.
 
     >>> validate = Schema(Match(r'^0x[A-F0-9]+$'))
@@ -645,7 +653,7 @@ def Match(pattern, msg=None):
     >>> validate('123EF4')
     Traceback (most recent call last):
     ...
-    ValidationError: does not match regular expression @ data[]
+    ValidationError: value 123EF4 does not match the regexp ^0x[A-F0-9]+$ @ .
 
     Pattern may also be a compiled regular expression:
 
@@ -659,25 +667,8 @@ def Match(pattern, msg=None):
     @wraps(Match)
     def f(v, path):
         if not pattern.match(v):
-            raise ValueError(msg or 'does not match regular expression')
+            raise ValueError('DOESNOTMATCH', v, pattern.pattern)
         return v
-    return f
-
-
-def Replace(pattern, substitution, msg=None):
-    """Regex substitution.
-
-    >>> validate = Schema(All(Replace('you', 'I'),
-    ...                       Replace('hello', 'goodbye')))
-    >>> validate('you say hello')
-    'I say goodbye'
-    """
-    if isinstance(pattern, basestring):
-        pattern = re.compile(pattern)
-
-    @wraps(Replace)
-    def f(v, path):
-        return pattern.sub(substitution, v)
     return f
 
 
@@ -689,48 +680,11 @@ def Url():
             urlparse.urlparse(v)
             return v
         except:
-            raise ValueError('expected a URL')
+            raise ValueError('NOTAURL', v)
     return f
 
 
-def IsFile():
-    """Verify the file exists."""
-    @wraps(IsFile)
-    def f(v, path):
-        ret = os.path.isfile(v)
-        if not ret:
-            raise TypeError("not a file")
-        return ret
-    return f
-
-
-def IsDir():
-    """Verify the directory exists.
-
-    >>> IsDir()('/', [])
-    '/'
-    """
-    @wraps(IsDir)
-    def f(v, path):
-        ret = os.path.isdir(v)
-        if not ret:
-            raise TypeError("not a directory")
-        return v
-    return f
-
-
-def PathExists():
-    """Verify the path exists, regardless of its type."""
-    @wraps(PathExists)
-    def f(v, path):
-        ret = os.path.exists(v)
-        if not ret:
-            raise TypeError("path does not exist")
-        return v
-    return f
-
-
-def Range(min=None, max=None, msg=None):
+def Range(min=None, max=None):
     """Limit a value to a range.
 
     Either min or max may be omitted.
@@ -740,24 +694,9 @@ def Range(min=None, max=None, msg=None):
     @wraps(Range)
     def f(v, path):
         if min is not None and v < min:
-            raise ValueError(msg or 'value must be at least %s' % min)
+            raise ValueError("TOOLOW", v, min)
         if max is not None and v > max:
-            raise ValueError(msg or 'value must be at most %s' % max)
-        return v
-    return f
-
-
-def Clamp(min=None, max=None, msg=None):
-    """Clamp a value to a range.
-
-    Either min or max may be omitted.
-    """
-    @wraps(Clamp)
-    def f(v, path):
-        if min is not None and v < min:
-            v = min
-        if max is not None and v > max:
-            v = max
+            raise ValueError("TOOHIGH", v, max)
         return v
     return f
 
@@ -767,9 +706,9 @@ def Length(min=None, max=None, msg=None):
     @wraps(Length)
     def f(v, path):
         if min is not None and len(v) < min:
-            raise ValueError(msg or 'length of value must be at least %s' % min)
+            raise ValueError("TOOSHORT", min)
         if max is not None and len(v) > max:
-            raise ValueError(msg or 'length of value must be at most %s' % max)
+            raise ValueError("TOOLONG", max)
         return v
     return f
 

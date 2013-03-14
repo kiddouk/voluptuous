@@ -13,7 +13,7 @@ It should show the exact index and container type, in this case a list value::
   >>> schema(['one', 'two'])
   Traceback (most recent call last):
   ...
-  ValidationError: expected a dictionary @ data[1]
+  ValidationError: expected a dict @ 1.
 
 It should also be accurate for nested values::
 
@@ -21,17 +21,17 @@ It should also be accurate for nested values::
   ...                          'six': {'seven': 'eight'}}])
   Traceback (most recent call last):
   ...
-  ValidationError: not a valid value @ data[1]['two']
+  ValidationError: Not a valid value @ 1.two.
   >>> schema(['one', {'two': 'three', 'four': ['six'],
   ...                          'six': {'seven': 'eight'}}])
   Traceback (most recent call last):
   ...
-  ValidationError: not a valid value @ data[1]['four'][0]
+  ValidationError: Not a valid value @ 1.four.0.
   >>> schema(['one', {'two': 'three', 'four': ['five'],
   ...                          'six': {'seven': 'nine'}}])
   Traceback (most recent call last):
   ...
-  ValidationError: not a valid value @ data[1]['six']['seven']
+  ValidationError: Not a valid value @ 1.six.seven.
 
 Errors should be reported depth-first::
 
@@ -39,7 +39,7 @@ Errors should be reported depth-first::
   >>> validate({'one': {'two': 'three', 'four': 'six'}})
   Traceback (most recent call last):
   ...
-  ValidationError: not a valid value @ data['one']['four']
+  ValidationError: Not a valid value @ one.four.
 
 
 dict, list, and tuple should be available as type validators::
@@ -79,19 +79,19 @@ Multiple errors are reported::
   ...   schema({'one': 2, 'two': 3, 'three': 4})
   ... except ValidationError as e:
   ...   paths = sorted(e.errors.keys())
-  ...   print([(path, str(error)) for path in paths for error in e.errors[path]])  # doctest: +NORMALIZE_WHITESPACE
-  [("data['one']", 'not a valid value'),
-  ("data['three']", 'extra keys not allowed'),
-  ("data['two']", 'not a valid value')]
+  ...   print([(path, translate_exception(error)) for path in paths for error in e.errors[path]])  # doctest: +NORMALIZE_WHITESPACE
+  [('one', 'Not a valid value'),
+  ('three', 'Extra key not allowed'),
+  ('two', 'Not a valid value')]
   >>> schema = Schema([[1], [2], [3]])
   >>> try:
   ...   schema([1, 2, 3])
   ... except ValidationError as e:
   ...   paths = sorted(e.errors.keys())
-  ...   print([(path, str(error)) for path in paths for error in e.errors[path]])  # doctest: +NORMALIZE_WHITESPACE
-  [('data[0]', 'expected a list'),
-   ('data[1]', 'expected a list'),
-   ('data[2]', 'expected a list')]
+  ...   print([(path, translate_exception(error)) for path in paths for error in e.errors[path]])  # doctest: +NORMALIZE_WHITESPACE
+  [('0', 'expected a list'),
+   ('1', 'expected a list'),
+   ('2', 'expected a list')]
 
 Custom classes validate as schemas::
 
@@ -124,4 +124,4 @@ Schemas built with All() should give the same error as the original validator (I
     >>> schema({'items': [{}]})
     Traceback (most recent call last):
     ...
-    ValidationError: Missing key @ data['items'][0]['foo']
+    ValidationError: Missing mandatory value @ items.0.foo.

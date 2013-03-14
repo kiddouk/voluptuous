@@ -54,21 +54,21 @@ and goes a little further for completeness.
   >>> schema({})
   Traceback (most recent call last):
   ...
-  ValidationError: Missing key @ data['q']
+  ValidationError: Missing mandatory value @ q.
 
 ...must be a string::
 
   >>> schema({'q': 123})
   Traceback (most recent call last):
   ...
-  ValidationError: expected str @ data['q']
+  ValidationError: expected a str @ q.
 
 ...and must be at least one character in length::
 
   >>> schema({'q': ''})
   Traceback (most recent call last):
   ...
-  ValidationError: length of value must be at least 1 @ data['q']
+  ValidationError: length must be at least 1 @ q.
   >>> schema({'q': '#topic'})
   {'q': '#topic'}
 
@@ -77,20 +77,21 @@ and goes a little further for completeness.
   >>> schema({'q': '#topic', 'per_page': 900})
   Traceback (most recent call last):
   ...
-  ValidationError: value must be at most 20 @ data['per_page']
+  ValidationError: value (900) must be at most 20 @ per_page.
   >>> schema({'q': '#topic', 'per_page': -10})
   Traceback (most recent call last):
   ...
-  ValidationError: value must be at least 1 @ data['per_page']
+  ValidationError: value (-10) must be at least 1 @ per_page.
 
 "page" is an integer >= 0::
 
   >>> schema({'q': '#topic', 'page': 'one'})
   Traceback (most recent call last):
   ...
-  ValidationError: expected int @ data['page']
+  ValidationError: expected a int @ page.
   >>> schema({'q': '#topic', 'page': 1})
   {'q': '#topic', 'page': 1}
+
 
 Defining schemas
 ----------------
@@ -120,7 +121,8 @@ instance of the type::
   >>> schema('one')
   Traceback (most recent call last):
   ...
-  ValidationError: expected int @ data[]
+  ValidationError: expected a int @ .
+
 
 Lists
 ~~~~~
@@ -131,15 +133,16 @@ Lists are treated as a list of strict elements. Everything should match:
   >>> schema([1])
   Traceback (most recent call last):
   ...
-  ValidationError: Missing key @ data[1]
+  ValidationError: Missing mandatory value @ 1.
   >>> schema([1, 1, 1])
   Traceback (most recent call last):
   ...
-  ValidationError: not a valid value @ data[1]
+  ValidationError: Not a valid value @ 1.
   >>> schema(['a', 1, 'string', 1, 'string'])
   Traceback (most recent call last):
   ...
-  ValidationError: not a valid value @ data[0]
+  ValidationError: Not a valid value @ 1.
+
 
 Validation functions
 ~~~~~~~~~~~~~~~~~~~~
@@ -156,7 +159,12 @@ this property. Here's an example of a date validator::
 
   >>> from datetime import datetime
   >>> def Date(fmt='%Y-%m-%d'):
-  ...   return lambda v, p: datetime.strptime(v, fmt)
+  ...   def f(v, p):
+  ...      try:
+  ...          return datetime.strptime(v, fmt)
+  ...      except ValueError:
+  ...          raise ValueError("DOESNOTMATCH", v, fmt)
+  ...   return f
 
   >>> schema = Schema(Date())
   >>> schema('2013-03-03')
@@ -164,29 +172,7 @@ this property. Here's an example of a date validator::
   >>> schema('2013-03')
   Traceback (most recent call last):
   ...
-  ValidationError: time data '2013-03' does not match format '%Y-%m-%d' @ data[]
-
-In addition to simply determining if a value is valid, validators may mutate
-the value into a valid form. An example of this is the ``Coerce(type)``
-function, which returns a function that coerces its argument to the given
-type::
-
-  def Coerce(type, msg=None):
-      """Coerce a value to a type.
-
-      If the type constructor throws a ValueError, the value will be marked as
-      Invalid.
-      """
-      def f(v):
-          try:
-              return type(v)
-          except ValueError:
-              raise Invalid(msg or ('expected %s' % type.__name__))
-      return f
-
-This example also shows a common idiom where an optional human-readable
-message can be provided. This can vastly improve the usefulness of the
-resulting error messages.
+  ValidationError: value 2013-03 does not match the regexp %Y-%m-%d @ .
 
 .. _extra:
 
@@ -207,7 +193,7 @@ exceptions::
   >>> schema({1: 2, 2: 3})
   Traceback (most recent call last):
   ...
-  ValidationError: extra keys not allowed @ data[1]
+  ValidationError: Extra key not allowed @ 1.
 
 This behaviour can be altered on a per-schema basis with ``Schema(..., extra=True)``::
 
@@ -224,7 +210,7 @@ By default, keys in the schema are required to be in the data::
   >>> schema({3: 4})
   Traceback (most recent call last):
   ...
-  ValidationError: Missing key @ data[1]
+  ValidationError: Missing mandatory value @ 1.
 
 
 Optional dictionary keys
@@ -232,18 +218,18 @@ Optional dictionary keys
 
 Per default, all keys are required. Some keys may be individually marked as optional using the marker token ``Optional(key)``::
 
-  >>> from voluptuous import Optional, ValidationError
+  >>> from voluptuous import Optional, ValidationError, translate_exception
   >>> schema = Schema({1: 2, Optional(3): 4})
   >>> schema({})
   Traceback (most recent call last):
   ...
-  ValidationError: Missing key @ data[1]
+  ValidationError: Missing mandatory value @ 1.
   >>> schema({1: 2})
   {1: 2}
   >>> schema({1: 2, 4: 5})
   Traceback (most recent call last):
   ...
-  ValidationError: extra keys not allowed @ data[4]
+  ValidationError: Extra key not allowed @ 4.
   >>> schema({1: 2, 3: 4})
   {1: 2, 3: 4}
 
@@ -276,16 +262,17 @@ attempted::
   >>> try:
   ...     schema([[6]])
   ... except ValidationError as e:
-  ...     print e.errors['data[0][0]'][0]
-  not a valid value
+  ...     print translate_exception(e.errors['0.0'][0])
+  Not a valid value
 
 If we pass the data ``[6]``, the ``6`` is not a list type and so will not
 recurse into the first element of the schema. This will create a type error::
 
-  >>> schema([6])
-  Traceback (most recent call last):
-  ...
-  ValidationError: expected a list @ data[0]
+  >>> try:
+  ...     schema([6])
+  ... except ValidationError as e:
+  ...     print translate_exception(e.errors['0'][0])
+  expected a list
 
 
 Why use Voluptuous over another validation library?
@@ -294,7 +281,7 @@ Why use Voluptuous over another validation library?
   No need to subclass anything, just use a function.
 
 **Errors are simple exceptions.**
-  A validator can just ``raise Invalid(msg)`` and expect the user to get useful
+  A validator can just ``raise VALUEERROR(msg)`` and expect the user to get useful
   messages.
 
 **Schemas are basic Python data structures.**
